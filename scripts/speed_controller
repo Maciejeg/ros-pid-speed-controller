@@ -8,6 +8,9 @@ import numpy as np
 MAX_THROTTLE = 1.0
 MAX_BRAKING = 10000
 
+MIN_SIGNAL_VAL = -1.0
+MAX_SIGNAL_VAL= 1.0
+
 KP = 1.0 # Proportional
 KI = 1.0 # Integral
 KD = 0.0 # [D]o not use
@@ -111,7 +114,8 @@ class PID:
 if __name__ == '__main__':
     rospy.init_node("speed_controller", anonymous=True)
     try:
-        speed_controller = PID(KP, KI, KD, -1, 1, MAX_THROTTLE, MAX_BRAKING)
+        speed_controller = PID(KP, KI, KD, MIN_SIGNAL_VAL,\
+                               MAX_SIGNAL_VAL , MAX_THROTTLE, MAX_BRAKING)
         rospy.spin()
     except rospy.ROSInterruptException:
         print "Exception Thrown"

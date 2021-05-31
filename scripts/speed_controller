@@ -1,0 +1,117 @@
+#! /usr/bin/env python
+
+import rospy
+from geometry_msgs.msg import TwistStamped
+from std_msgs.msg import Float64
+import numpy as np
+
+MAX_THROTTLE = 1.0
+MAX_BRAKING = 10000
+
+KP = 1.0 # Proportional
+KI = 1.0 # Integral
+KD = 0.0 # [D]o not use
+
+
+def vec3_length(vec):
+    return np.sqrt(vec.x**2 + vec.y**2 + vec.z**2)
+
+
+class PID:
+    def __init__(self, k_p, k_i, k_d, min_val, max_val, max_throttle, max_braking):
+        self._k_p = k_p
+        self._k_i = k_i
+        self._k_d = k_d
+        self._min = min_val
+        self._max = max_val
+        self._max_throttle = max_throttle
+        self._max_braking = max_braking
+
+        self.last_time = None
+        self.twist = None
+        self.speed = None
+
+        self.throttle_publisher = rospy.Publisher('/throttle_cmd', Float64, queue_size=1)
+        self.brake_publisher = rospy.Publisher('/brake_cmd', Float64, queue_size=1)
+
+        self.speed_subscriber = rospy.Subscriber('/speed', Float64, self._speed_callback)
+        self.twist_subscriber = rospy.Subscriber('/twist', TwistStamped, self._twist_callback)
+
+        self.timer = rospy.Timer(rospy.Duration(0.05), self._timer_callback)
+
+    _integral = 0
+    _pre_err = 0
+
+    def _twist_callback(self, msg):
+        self.twist = msg
+
+    def _speed_callback(self, msg):
+        self.speed = msg
+
+    def _timer_callback(self, _):
+        if None in [self.twist, self.speed]:
+            return
+
+        if self.last_time:
+            dt = rospy.get_time() - self.last_time
+        else:
+            dt = 0
+
+        actual_speed = vec3_length(self.twist.twist.linear)
+        output, integral, pre_error = self.calculate(self.speed.data, actual_speed,\
+                                                    self._integral, self._pre_err,\
+                                                    self._k_p, self._k_i, self._k_d, dt,\
+                                                    self._min, self._max)
+
+        self._integral = integral
+        self._pre_err = pre_error
+        self.last_time = rospy.get_time()
+
+        if output > 0:
+            throttle = Float64()
+            throttle.data = output
+            self.throttle_publisher.publish(throttle)
+        else:
+            brake = Float64()
+            brake.data = -output * self._max_braking
+            self.brake_publisher.publish(brake)
+
+    @staticmethod
+    def saturation(value, min_val, max_val):
+        return min(max(value, min_val), max_val)
+
+    @staticmethod
+    def calculate(setpoint, value, integral, pre_error, k_p, k_i, k_d, dt, min_val=-1, max_val=1):
+
+        error = setpoint - value
+
+        p_out = k_p * error
+
+        integral += error * dt
+        integral = PID.saturation(integral, min_val, max_val) # anti windup
+        i_out = k_i * integral
+
+        try:
+            derivative = (error - pre_error)/dt
+        except ZeroDivisionError:
+            derivative = 0
+
+        d_out = k_d * derivative
+
+        output = p_out + i_out + d_out
+        output = PID.saturation(output, min_val, max_val)
+
+        pre_error = error
+
+        print("Error: {:10.4f} Integral: {:10.4f} Proportional: {:10.4f}\
+               Derivative: {:10.4f} Output: {:10.4f}".format(error, i_out, p_out, d_out, output))
+        return output, integral, pre_error
+
+
+if __name__ == '__main__':
+    rospy.init_node("speed_controller", anonymous=True)
+    try:
+        speed_controller = PID(KP, KI, KD, -1, 1, MAX_THROTTLE, MAX_BRAKING)
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        print "Exception Thrown"
